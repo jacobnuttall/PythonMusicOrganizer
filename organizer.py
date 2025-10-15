@@ -43,8 +43,7 @@ import io
 
 # Logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-music.logger.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 # Set standard output handler
 formatter = logging.Formatter('%(levelname)s - %(asctime)s - %(message)s')
@@ -82,8 +81,7 @@ def set_log_level(log_level=None):
         raise ValueError(f"Invalid log level: {log_level}")
     
     level = eval(log_level)
-    logger.setLevel(level)
-    music.logger.setLevel(level)
+    logging.basicConfig(level=level)
     
 def load_config(config_file):
     """Load configuration from a TOML file."""

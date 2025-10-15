@@ -54,7 +54,7 @@ def noInterrupt(func)->typing.Callable:
     return wrapper
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 ACOUST_ID_RATE_LIMIT = 3.0 # per second
 
@@ -502,6 +502,13 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
         unknown_year = True
         year = None
         
+        
+    first_metadata = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+    logger.info('------')
+    logger.info(f'Extracted Metadata for "{file}":\n{first_metadata}')
+    logger.info('------')
+    
+        
     has_unknown = unknown_artist or unknown_album or unknown_title or unknown_year
     update_artist = unknown_artist or update_from_mb
     update_album = unknown_album or update_from_mb
@@ -550,12 +557,20 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
                     logger.info(f"Updating year for \"{file}\" w/ \"{mb_metadata.year}\"")
                     year = mb_year
                     song['date'] = year
+                    
+                    
+            updated_metadata = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)    
+            logger.info('------')
+            logger.info(f'Updated Metadata for "{file}":\n{updated_metadata}')
+            logger.info('------')
                 
         except AIDMatchError as e:
             logger.warning(f"No AcoustID match found for \"{file}\". Cannot update metadata from MusicBrainz.")
         except Exception as e:
             # TODO: Print stacktrace
             logger.warning(f"Could not update metadata for \"{file}\": {traceback.format_exc()}")
+            
+
     
     metadata = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
            
