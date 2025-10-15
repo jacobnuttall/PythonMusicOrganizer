@@ -478,42 +478,28 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
         unknown_title = True
         title = filename
         
-        
-    unknown_year = False   
     if 'date' in song:
         date = ''.join(song['date'])
         date = dateutil.parser.parse(date)
         year = date.year
     
     else:
-        unknown_year = True
         year = None
-        
-    if artists is not None and 'unknown' in artists.lower():
-        unknown_artist = True
-        artists = None
-    if album is not None and 'unknown' in album.lower():
-        unknown_album = True
-        album = None
-    if title is not None and 'unknown' in title.lower():
-        unknown_title = True
-        title = None
-    if year is not None and 'unknown' in str(year).lower():
-        unknown_year = True
-        year = None
-        
-        
+       
     first_metadata = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
     logger.info('------')
     logger.info(f'Extracted Metadata for "{file}":\n{first_metadata}')
     logger.info('------')
     
+    unknown_artist = artists is None 
+    unknown_album = album is None
+    unknown_title = title is None
         
-    has_unknown = unknown_artist or unknown_album or unknown_title or unknown_year
+    has_unknown = unknown_artist or unknown_album or unknown_title # Not too concerned about year being unknown
     update_artist = unknown_artist or update_from_mb
     update_album = unknown_album or update_from_mb
     update_title = unknown_title or update_from_mb
-    update_year = unknown_year or update_from_mb
+    update_year = update_from_mb
     
     if update_from_mb and aid_api_key is None:
         logger.warning("AcoustID API key not provided. Cannot update metadata from MusicBrainz.")
@@ -593,6 +579,7 @@ def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pb
     logger.info(f"Copied \"{src}\" to \"{dest}\"")
     if pbar is not None:
         pbar.set_description(f'\nCopied "{src}" to "{dest}".')
+        print(end='') # Prevent tqdm from adding a new line
     
     save_mark_done(src, save=save)
     
@@ -634,6 +621,7 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                 message_skip_procesed(root)
                 count_total_files(root)
                 pbar.update(len(files))
+                print(end='') # Prevent tqdm from adding a new line
                 continue
             
             for file in files:
@@ -641,12 +629,13 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                 src_filepath = os.path.join(root, file)
                 
                 pbar.update()
+                print(end='') # Prevent tqdm from adding a new line
                 
                 if save_check_done(src_filepath, save=save):
                     message_skip_procesed(src_filepath)
                     continue
                 
-                pbar.set_description(f'Processing \"{src_filepath}\".')
+                pbar.set_description(f'\nProcessing \"{src_filepath}\".')
                 
                 if not check_is_music_file(src_filepath):
                     logger.info(f'Skipping non-music file: \"{src_filepath}\"')
