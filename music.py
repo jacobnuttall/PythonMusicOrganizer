@@ -39,8 +39,22 @@ import tqdm
 from collections import Counter
 from nltk.metrics import edit_distance
 import json
+from threading import Thread 
+import time 
+
+
+# Python decorator to run a function in a thread and prevent keyboard interrupts
+def noInterrupt(func)->typing.Callable:
+    def wrapper(*args, **kwargs)->None:
+        t = Thread(target=func, args=args, kwargs=kwargs)
+        t.start()
+        t.join()
+        
+        
+    return wrapper
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 ACOUST_ID_RATE_LIMIT = 3.0 # per second
 
@@ -57,14 +71,14 @@ def prompt_confirm(message):
 
 class SaveState():
     
-    processed_daata:dict
+    processed_data:dict
     
     def __init__(self, outpath, save_data=None, ):
         
         if save_data is None:
-            self.processed_daata = self.init_child(self.rootstring)
+            self.processed_data = self.init_child(self.rootstring())
         else:
-            self.processed_daata = save_data
+            self.processed_data = save_data
             
         self.outpath = outpath
         
@@ -104,9 +118,10 @@ class SaveState():
     def donestring():   
         return 'done'
     
+    @noInterrupt
     def save_state(self):
         with open(self.outpath, 'w') as f:
-            json.dump(self.processed_daata, f, indent=4)
+            json.dump(self.processed_data, f, indent=4)
         
     def init_child(self, name, mark_done=False):
         return {self.namestring(): name, self.childstring(): {}, self.donestring(): mark_done}
@@ -114,7 +129,7 @@ class SaveState():
     def update_path(self, path, mark_done=False)->None:
         split = path.split(os.sep)
         end = split[-1]
-        root = self.processed_daata
+        root = self.processed_data
         
         for piece in split:
             if piece not in root[self.childstring()]:
@@ -132,7 +147,7 @@ class SaveState():
     def get_state(self, path)->bool:
         split = path.split(os.sep)
         end = split[-1]
-        root = self.processed_daata
+        root = self.processed_data
     
         for piece in split:
             if root[self.donestring()]:
@@ -144,7 +159,6 @@ class SaveState():
             if root[self.namestring()] == end:
                 return root[self.donestring()]
         return False
-    
     
 
 def start_musicbrainz(app_name, app_version, contact):
@@ -301,7 +315,6 @@ class MetaData():
     def __str__(self):
         return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: {self.relativeFilePath}'
     
-    
 class AIDMatchError(Exception):
     pass
 
@@ -329,7 +342,7 @@ def score_string_match(candidate:str, target:str)->float:
     else:
         edit_score = 1 - (edit_dist / max_len)
     
-    return ((intersection_size / target_size) + edit_score) / 2.0
+    return (intersect_score + edit_score) / 2.0
 
 def aidmatch(filename, AID_API_KEY, og_artist=None, og_title=None):
     try:
@@ -345,7 +358,6 @@ def aidmatch(filename, AID_API_KEY, og_artist=None, og_title=None):
         logger.error("web service request failed:", e.message)
         raise e
 
-    first = True
     aid_score, rid, title, artist = 0.0, None, None, None
     artist_score = 0.0
     title_score = 0.0
@@ -549,10 +561,13 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
            
     return metadata, song
 
-def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pbar=None):
+@noInterrupt
+def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pbar=None, save=None):
+   
     if not overwrite and os.path.exists(dest):
         basename = os.path.basename(dest)
         logger.warning(f'File "{basename}" already exists. Skipping copy of "{src}".')
+        save_mark_done(src, save=save)
         return
     
      # Ensure the destination directory exists
@@ -563,6 +578,8 @@ def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pb
     logger.info(f"Copied \"{src}\" to \"{dest}\"")
     if pbar is not None:
         pbar.set_description(f'\nCopied "{src}" to "{dest}".')
+    
+    save_mark_done(src, save=save)
     
 def count_total_files(src):
     total_files = 0
@@ -641,10 +658,7 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                     continue
                 
                 try:
-                    copy_song(src_filepath, dest_path, overwrite=overwrite, mutagen_file=song, pbar=pbar)
-                    
-                    # Mark done if we can successfully copy the file
-                    save_mark_done(src_filepath, save=save)
+                    copy_song(src_filepath, dest_path, overwrite=overwrite, mutagen_file=song, save=save, pbar=pbar)
                 except Exception as e:
                     logger.error(f"Error copying \"{src_filepath}\" to \"{dest_path}\": {traceback.format_exc()}")
                     continue

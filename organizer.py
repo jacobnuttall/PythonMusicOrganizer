@@ -43,7 +43,8 @@ import io
 
 # Logger
 logger = logging.getLogger(__name__)
-level = logging.INFO
+logger.setLevel(logging.INFO)
+music.logger.setLevel(logging.INFO)
 
 # Set standard output handler
 formatter = logging.Formatter('%(levelname)s - %(asctime)s - %(message)s')
@@ -118,7 +119,7 @@ def main(config):
     fpcalc_path = config.get('fpcalc_path', 'fpcalc')  # Default to 'fpcalc' if not specified
     overwrite = config.get('overwrite', False)
     log_path = config.get('log_path', None)
-    log_level = config.get('log_level', None)
+    log_level = config.get('log_level', 'logging.INFO')
     save_file = config.get('save_file', None)
     
     save = None
