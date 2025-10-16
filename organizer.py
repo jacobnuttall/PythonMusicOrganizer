@@ -71,6 +71,7 @@ def set_logger(log_path):
     handler = logging.FileHandler(log_path)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+    music.logger.addHandler(handler)
     
 def set_log_level(log_level=None):
     """Set the logging level."""
@@ -119,6 +120,8 @@ def main(config):
     log_path = config.get('log_path', None)
     log_level = config.get('log_level', 'logging.INFO')
     save_file = config.get('save_file', None)
+    segment_duration = int(config.get('shazam_duration', 10)) # Duration in seconds to use for Shazam recognition (max 30 seconds)
+    
     
     save = None
     
@@ -129,18 +132,17 @@ def main(config):
         save = music.SaveState.load_save(save_file)
     
     if log_path is not None:
+        print(log_path)
         set_logger(log_path)
         
     if log_level is not None:
         set_log_level(log_level)
-    else:
-        
-        print('HERE')
-        set_log_level('logging.WARNING')
         
     # Set the environment variable for fpcalc
     os.environ[acoustid.FPCALC_ENVVAR] = fpcalc_path
-    music.start_musicbrainz(APP_NAME, APP_VERSION, contact)
+    
+    music.start_service(APP_NAME, APP_VERSION, contact)# , duration=segment_duration)
+    
     music.process_paths(
         srcs, 
         dest, 
