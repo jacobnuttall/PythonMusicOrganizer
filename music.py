@@ -276,7 +276,8 @@ class MetaData():
     @title.setter
     def title(self, value):
         self._title = value
-        
+    
+    # TODO: Replace with static methods    
     @property 
     def unknownArtist(self)->str:
         return 'Unknown Artist'
@@ -322,9 +323,8 @@ class MetaData():
     @property 
     def relativeFileDir(self)->str:
         artists_dir = self.artists_dir
-        year_dir = self.year_dir
         album_dir = self.album_dir
-        path = os.path.join(self.filetype, artists_dir, year_dir, album_dir)
+        path = os.path.join(self.filetype, artists_dir, album_dir)
         return path
     
     @property 
@@ -686,6 +686,14 @@ def process_metadata_mutagen(song:mutagen.FileType, filetype)->mutagen.FileType:
                 unknown_artist = False
                 break
             
+    # Try author 
+    if unknown_artist:
+        for key in song:
+            if 'author' in key.lower():
+                artists = process_mutagen_key(song, key)
+                unknown_artist = False
+                break
+            
     # Search for an album tag
     if unknown_album:
         for key in song:
@@ -720,8 +728,7 @@ def process_metadata_mutagen(song:mutagen.FileType, filetype)->mutagen.FileType:
     return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
 
 def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
-    parent_dir = os.path.dirname(file)
-    parent_parent_dir = os.path.dirname(parent_dir)
+    parent_dir = os.path.basename(os.path.dirname(file))
     basename = os.path.basename(file)
     filename, filetype = os.path.splitext(basename)
     filetype = filetype.lstrip('.')
@@ -735,15 +742,13 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     title = metadata._title
     year = metadata._year
     
-    print(artists, album, title, year)
-    
     unknown_artist = artists is None or 'unknown' in artists.lower()
     unknown_album = album is None or 'unknown' in album.lower()
     unknown_title = title is None or 'unknown' in title.lower()
     unknown_year = year is None or 'unknown' in str(year).lower()
     
     if unknown_album:
-        metadata.album = os.path.basename(parent_dir)
+        metadata.album = parent_dir
         
     if unknown_title:
         metadata.title = filename
@@ -837,23 +842,11 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
         title = metadata._title
     if doUpdate and not unknown_year:
         year = metadata._year
-        
-        
-    print(artists)
     
     if unknown_artist: 
         # If artist is still unknown, we don't want to make any changes to the metadata.
         # Will require a manual sorting.
-        metadata.artists = '! Sort'
-    
-        # Preserve some of the original filestructure when artist is missing
-        if unknown_album:
-            metadata.album = os.path.basename(parent_dir)
-        if unknown_year:
-            metadata.year = os.path.basename(parent_parent_dir)
-        
-        return metadata, song
-
+        return None
     
     # Only change the metadata fields that we consider known
     if update_album and not unknown_album:
@@ -869,7 +862,7 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
         except:
             pass
     
-    return metadata, song
+    return metadata
 
 @noInterrupt
 def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pbar=None, save=None):
@@ -926,7 +919,7 @@ def save_check_done(src, save:SaveState=None)->bool:
         return save.get_state(src)
     return False
 
-def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, total_files=None, update_from_mb=True, save:SaveState=None):
+def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, total_files=None, update_from_mb=True, save:SaveState=None, unknown_folder='! Sort'):
     with tqdm.tqdm(total=total_files, desc="Processing files", dynamic_ncols=False) as pbar:
         for root, dirs, files in os.walk(src, topdown=False): # Walk tree from bottom up to ensure we process files in subdirectories first
             
@@ -971,8 +964,18 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                     continue 
                 
                 try:
-                    metadata, song = extract_and_update_metadata(src_filepath, song, aid_api_key=acoustid_api_key, update_from_mb=update_from_mb)
-                    dest_path = os.path.join(dst, metadata.relativeFilePath)
+                    metadata = extract_and_update_metadata(src_filepath, song, aid_api_key=acoustid_api_key, update_from_mb=update_from_mb)
+                    
+                    if metadata is not None:
+                        dest_path = os.path.join(dst, metadata.relativeFilePath)
+                        
+                    else:
+                        dest_path = os.path.join(dst, unknown_folder)
+                        parent_dir = os.path.dirname(src_filepath)
+                        parent_parent_dir = os.path.dirname(parent_dir)
+                        parent_dirname = os.path.basename(parent_dir)
+                        parent_parent_dirname = os.path.basename(parent_parent_dir)
+                        dest_path = os.path.join(dest_path, parent_parent_dirname, parent_dirname, file)
                     
                 except Exception as e:
                     logger.error(f"Error processing \"{src_filepath}\": {traceback.format_exc()}")
