@@ -936,7 +936,6 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
             
             for file in files:
                 
-                
                 src_filepath = os.path.join(root, file)
                 
                 pbar.update()
@@ -967,10 +966,13 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                     metadata = extract_and_update_metadata(src_filepath, song, aid_api_key=acoustid_api_key, update_from_mb=update_from_mb)
                     
                     if metadata is not None:
+                        logger.info(f'Final Metadata for "{src_filepath}":\n{metadata}')
                         dest_path = os.path.join(dst, metadata.relativeFilePath)
                         
                     else:
-                        dest_path = os.path.join(dst, unknown_folder)
+                        logging.warning(f"Could not confidently identify metadata for \"{src_filepath}\". Placing in \"{unknown_folder}\" folder for later sorting.")
+                        filetype = os.path.splitext(file)[1].lstrip('.')
+                        dest_path = os.path.join(dst, unknown_folder, filetype)
                         parent_dir = os.path.dirname(src_filepath)
                         parent_parent_dir = os.path.dirname(parent_dir)
                         parent_dirname = os.path.basename(parent_dir)
