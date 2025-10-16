@@ -412,14 +412,15 @@ def process_aid_results(results, og_artist=None, og_title=None)->dict:
     
     logger.info('------')
     logger.info('AcoustID Match Found:')
-    logger.info('Recording ID: %s' % rid)
-    logger.info('Found Title: %s' % title)
-    logger.info('Found Artist: %s' % artist)
+    logger.info(f'Recording ID: {rid}')
+    logger.info(f'Found Title: {title}')
+    logger.info(f'Found Artist: {artist}')
     
     if og_artist is not None:
         logger.info('Original Artist: %s' % og_artist)
     if og_title is not None:
         logger.info('Original Title: %s' % og_title)
+        
     logger.info('http://musicbrainz.org/recording/%s' % rid)
     logger.info('Combined Score: %i%%' % (int(combined_score * 100)))
     logger.info('AcoustID Score: %i%%' % (int(aid_score * 100)))
@@ -505,8 +506,39 @@ def getValueIfNotNone(s1, s2):
     return s1
     
 
+def matchWithTargetMetadataArtist(candidate_artist, target_artist, threshold=0.8, message='')->bool:
+    artist_score = score_string_match(candidate_artist, target_artist)
+    logger.info(f"Artist Score{message}: {artist_score}")
+    if artist_score >= threshold:
+        return True
+    
+def matchWithTargetMetadataTitle(candidate_title, target_title, threshold=0.8, message='')->bool:
+    title_score = score_string_match(candidate_title, target_title)
+    logger.info(f"Title Score{message}: {title_score}")
+    if title_score >= threshold:
+        return True
 
-def search_online_metadata(file, aid_api_key, og_artist=None, og_title=None, og_album=None)->typing.Tuple[MetaData, dict]:
+def matchWithTargetMetadata(candidate_metadata, target_metadata, threshold=0.8, message='')->bool:
+    return matchWithTargetMetadataArtist(candidate_metadata.artists, target_metadata.artists, threshold=threshold, message=message) \
+        and matchWithTargetMetadataTitle(candidate_metadata.title, target_metadata.title, threshold=threshold, message=message)
+   
+def mergeMetadata(m1:MetaData, m2:MetaData)->MetaData:  
+    if m1 is None and m2 is None:
+        return None
+    if m1 is None:
+        return m2
+    if m2 is None:
+        return m1
+    
+    year = getValueIfNotNone(m1.year, m2.year)
+    artists = getValueIfNotNone(m1.artists, m2.artists)
+    album = getValueIfNotNone(m1.album, m2.album)
+    title = getValueIfNotNone(m1.title, m2.title)
+    filetype = getValueIfNotNone(m1.filetype, m2.filetype)
+    
+    return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+
+def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.Tuple[MetaData, dict]:
     filetype = os.path.splitext(file)[1].lstrip('.')
     
     # Find match with shazarm
@@ -523,7 +555,7 @@ def search_online_metadata(file, aid_api_key, og_artist=None, og_title=None, og_
     aid_metadata = None
     try:
         aid_results = aidmatch(file, aid_api_key)
-        aidrid, title, artists = process_aid_results(aid_results, og_artist=og_artist, og_title=og_title)
+        aidrid, title, artists = process_aid_results(aid_results, og_artist=ogMetaData.artists, og_title=ogMetaData.title)
         result = musicbrainzngs.get_recording_by_id(aidrid, includes=["artists", "releases"])
         aid_metadata = process_musicbrainz_metadata(result, artists, title, filetype)
         logger.info(f"AcoustID / MusicBrainz Metadata for \"{file}\":\n{aid_metadata}")
@@ -533,48 +565,59 @@ def search_online_metadata(file, aid_api_key, og_artist=None, og_title=None, og_
         logger.warning(f"No AcoustID match found for \"{file}\".")
     except Exception as e: # TODO: Print stacktrace
         logger.error(f"Error processing MusicBrainz metadata: {traceback.format_exc()}")
+        
+        
+    new_metadata = MetaData(year=ogMetaData.year, artists=ogMetaData.artists, album=ogMetaData.album, title=ogMetaData.title, filetype=filetype)
     
     if aid_metadata is not None and shazam_metadata is not None:
         # Compare the two and return the one with more complete metadata
-        if aid_metadata.artists.lower() == shazam_metadata.artists.lower():
-            # Comfortable to say that we found a match
-            artist = getValueIfNotNone(aid_metadata.artists, shazam_metadata.artists)
-            album = getValueIfNotNone(aid_metadata.album, shazam_metadata.album)
-            title = getValueIfNotNone(aid_metadata.title, shazam_metadata.title)
-            year = getValueIfNotNone(aid_metadata.year, shazam_metadata.year)
-            metadata = MetaData(year=year, artists=artist, album=album, title=title, filetype=filetype)
-            return metadata
         
-        else: 
-            # calculate the edit distance of the two artists
-            
-            artists_score = score_string_match(aid_metadata.artists, shazam_metadata.artists)
-            if artists_score > 0.8:
-                artist = getValueIfNotNone(aid_metadata.artists, shazam_metadata.artists)
-                album = getValueIfNotNone(aid_metadata.album, shazam_metadata.album)
-                title = getValueIfNotNone(aid_metadata.title, shazam_metadata.title)
-                year = getValueIfNotNone(aid_metadata.year, shazam_metadata.year)
-                metadata = MetaData(year=year, artists=artist, album=album, title=title, filetype=filetype)
-                return metadata
-            
-            else:
-                logger.warning(f"Discrepancy between AcoustID and Shazam results for \"{file}\". Trying to determine best match.")
+        if matchWithTargetMetadata(aid_metadata, shazam_metadata, threshold=0.8, message=' between AcoustID and Shazam'):
+            logger.info("AcoustID and Shazam results agree on artist and title. Using combined metadata, prefering AcoustID where available.")
+            new_metadata = mergeMetadata(aid_metadata, shazam_metadata)
+            return new_metadata, True
+           
+        else:
+            logger.warning(f"Could not reconcile AcoustID and Shazam results for \"{file}\".")
             
     if aid_metadata is not None:
-        # Check artist similarity to provided artist 
-        artists_score = score_string_match(aid_metadata.artists, og_artist)
-        logger.info(f"AcoustID Artist Score: {artists_score}")
-        if artists_score > 0.5:
-            
-            return aid_metadata
+        logger.info("Comparing AcoustID results to provided artist and title.")
+        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.8, message=' for AcoustID')
+        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.8, message=' for AcoustID')
+        if match_artist and match_title:
+            logger.info("AcoustID results match provided artist and title. Using AcoustID metadata.")
+            new_metadata = aid_metadata
+            if new_metadata.album == new_metadata.unknownAlbum:
+                new_metadata.album = ogMetaData.album
+            if new_metadata.year == new_metadata.unknownYear:
+                new_metadata.year = ogMetaData.year
+            return new_metadata, True
+        elif match_artist:
+            new_metadata.artists = aid_metadata.artists
+            return new_metadata, False
+        else:
+            logger.warning(f"AcoustID results do not match provided artist and title for \"{file}\".")
         
     if shazam_metadata is not None:
-        artists_score = score_string_match(shazam_metadata.artists, og_artist)
-        logger.info(f"Shazam Artist Score: {artists_score}")
-        if artists_score > 0.5:
-            return shazam_metadata
+        logger.info("Comparing Shazam results to provided artist and title.")
+        match_title = matchWithTargetMetadataTitle(shazam_metadata.title, ogMetaData.title, threshold=0.8, message=' for Shazam')
+        match_artist = matchWithTargetMetadataArtist(shazam_metadata.artists, ogMetaData.artists, threshold=0.8, message=' for Shazam')       
+        if match_artist and match_title:
+            logger.info("Shazam results match provided artist and title. Using Shazam metadata.")
+            new_metadata = shazam_metadata
+            if new_metadata.album == new_metadata.unknownAlbum:
+                new_metadata.album = ogMetaData.album
+            if new_metadata.year == new_metadata.unknownYear:
+                new_metadata.year = ogMetaData.year
+            return new_metadata, True
+        elif match_artist:
+            new_metadata.artists = shazam_metadata.artists
+            return new_metadata, False
+        
+        else:
+            logger.warning(f"Shazam results do not match provided artist and title for \"{file}\".")
             
-    return None # Not confident we have a match
+    return None, False # Not confident we have a match
 
 def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
     song = mutagen.File(file, easy=True)
@@ -627,7 +670,7 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
     update_album = unknown_album or update_from_mb
     update_title = unknown_title or update_from_mb
     update_year = update_from_mb or unknown_year
-    
+    doUpdate = False
     if update_from_mb and aid_api_key is None:
         logger.warning("AcoustID API key not provided. Cannot update metadata from MusicBrainz.")
     if has_unknown and aid_api_key is None:
@@ -642,8 +685,7 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
             
             # SEARCHING ONLINE FOR METADATA
             logger.info(f"Fetching metadata for \"{file}\" from MusicBrainz")
-            mb_metadata = search_online_metadata(file, aid_api_key, og_artist=artists, og_title=title)
-            
+            mb_metadata, doUpdate = search_online_metadata(file, aid_api_key, ogMetaData=metadata)
             
             logger.info(f"Successfully fetched metadata for \"{file}\" from MusicBrainz.")
             logger.info(f"MusicBrainz Metadata for \"{file}\":\n{mb_metadata}")
@@ -692,7 +734,7 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
         except Exception as e:
             logger.error(f"Could not update metadata for \"{file}\": {traceback.format_exc()}")
             
-    if unknown_artist: 
+    if unknown_artist and not doUpdate: 
         # If artist is still unknown, we don't want to make any changes to the metadata.
         # Will require a manual sorting.
         metadata.artists = '! Sort'
