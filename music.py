@@ -348,7 +348,7 @@ def score_string_match(candidate:str, target:str)->float:
 def start_service(app_name:str, app_version:str, contact:str):
     global shazam 
     start_musicbrainz(app_name, app_version, contact)
-    shazam = shazamio.Shazam(segment_duration_seconds=12)
+    shazam = shazamio.Shazam(segment_duration_seconds=12, http_client=shazamio.HTTPClient(retry_options=ExponentialRetry(attempts=12,max_timeout=30,statuses=[500,502,503,504,429])))
 
 def start_musicbrainz(app_name, app_version, contact):
     musicbrainzngs.set_useragent(app_name, app_version, contact)
@@ -572,7 +572,7 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
     if aid_metadata is not None and shazam_metadata is not None:
         # Compare the two and return the one with more complete metadata
         
-        if matchWithTargetMetadata(aid_metadata, shazam_metadata, threshold=0.8, message=' between AcoustID and Shazam'):
+        if matchWithTargetMetadata(aid_metadata, shazam_metadata, threshold=0.7, message=' between AcoustID and Shazam'):
             logger.info("AcoustID and Shazam results agree on artist and title. Using combined metadata, prefering AcoustID where available.")
             new_metadata = mergeMetadata(aid_metadata, shazam_metadata)
             return new_metadata, True
@@ -582,8 +582,8 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
             
     if aid_metadata is not None:
         logger.info("Comparing AcoustID results to provided artist and title.")
-        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.8, message=' for AcoustID')
-        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.8, message=' for AcoustID')
+        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.7, message=' for AcoustID')
+        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.7, message=' for AcoustID')
         if match_artist and match_title:
             logger.info("AcoustID results match provided artist and title. Using AcoustID metadata.")
             new_metadata = aid_metadata
@@ -595,13 +595,16 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
         elif match_artist:
             new_metadata.artists = aid_metadata.artists
             return new_metadata, False
+        elif match_title:
+            new_metadata.title = aid_metadata.title
+            return new_metadata, False
         else:
             logger.warning(f"AcoustID results do not match provided artist and title for \"{file}\".")
         
     if shazam_metadata is not None:
         logger.info("Comparing Shazam results to provided artist and title.")
-        match_title = matchWithTargetMetadataTitle(shazam_metadata.title, ogMetaData.title, threshold=0.8, message=' for Shazam')
-        match_artist = matchWithTargetMetadataArtist(shazam_metadata.artists, ogMetaData.artists, threshold=0.8, message=' for Shazam')       
+        match_title = matchWithTargetMetadataTitle(shazam_metadata.title, ogMetaData.title, threshold=0.7, message=' for Shazam')
+        match_artist = matchWithTargetMetadataArtist(shazam_metadata.artists, ogMetaData.artists, threshold=0.7, message=' for Shazam')       
         if match_artist and match_title:
             logger.info("Shazam results match provided artist and title. Using Shazam metadata.")
             new_metadata = shazam_metadata
@@ -611,7 +614,10 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
                 new_metadata.year = ogMetaData.year
             return new_metadata, True
         elif match_artist:
-            new_metadata.artists = shazam_metadata.artists
+            new_metadata.artists = aid_metadata.artists
+            return new_metadata, False
+        elif match_title:
+            new_metadata.title = aid_metadata.title
             return new_metadata, False
         
         else:
