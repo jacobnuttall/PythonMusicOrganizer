@@ -741,7 +741,7 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     unknown_year = year is None or 'unknown' in str(year).lower()
     
     if unknown_album:
-        metadata.album = parent_dir
+        metadata.album = os.path.basename(parent_dir)
         
     if unknown_title:
         metadata.title = filename
@@ -845,9 +845,9 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     
         # Preserve some of the original filestructure when artist is missing
         if unknown_album:
-            metadata.album = parent_dir
+            metadata.album = os.path.basename(parent_dir)
         if unknown_year:
-            metadata.year = parent_parent_dir
+            metadata.year = os.path.basename(parent_parent_dir)
         
         return metadata, song
 
