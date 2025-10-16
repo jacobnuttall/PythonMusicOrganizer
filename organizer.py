@@ -94,20 +94,8 @@ def load_config(config_file):
         logging.error(f"Error loading configuration: {e}")
         sys.exit(1)
 
-def prompt_confirm(message):
-    """Prompt the user for a yes/no confirmation."""
-    while True:
-        response = input(f"{message} (y/n): ").strip().lower()
-        if response in ['y', 'yes']:
-            return True
-        elif response in ['n', 'no']:
-            return False
-        else:
-            print("Please enter 'y' or 'n'.")
-
 def main(config):
     global AID_API_KEY, level
-    
     
     # Load configuration
     srcs = config['paths']
@@ -120,16 +108,12 @@ def main(config):
     log_path = config.get('log_path', None)
     log_level = config.get('log_level', 'logging.INFO')
     save_file = config.get('save_file', None)
-    segment_duration = int(config.get('shazam_duration', 10)) # Duration in seconds to use for Shazam recognition (max 30 seconds)
-    
+    prune_done = config.get('prune_done', True)
     
     save = None
     
-    
-    print(log_level)
-    
     if save_file is not None:
-        save = music.SaveState.load_save(save_file)
+        save = music.SaveState.load_save(save_file, prune_done=prune_done)
     
     if log_path is not None:
         print(log_path)
@@ -156,5 +140,3 @@ if __name__ == '__main__':
     config_file = args['config']
     config = toml.load(config_file)
     main(config)
-    
-    

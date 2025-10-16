@@ -83,7 +83,9 @@ class SaveState():
     
     processed_data:dict
     
-    def __init__(self, outpath, save_data=None, ):
+    def __init__(self, outpath, save_data=None, prune_done=True):
+        
+        self.prune_done = prune_done 
         
         if save_data is None:
             self.processed_data = self.init_child(self.rootstring())
@@ -95,7 +97,7 @@ class SaveState():
         self.save_state()
     
     @staticmethod
-    def load_save(save_file:str):
+    def load_save(save_file:str, prune_done=True):
         save_data = None
         
         if os.path.exists(save_file):
@@ -110,7 +112,7 @@ class SaveState():
         else:
             save_data = None 
             
-        return SaveState(save_file, save_data=save_data)
+        return SaveState(save_file, save_data=save_data, prune_done=prune_done)
     
     @staticmethod
     def rootstring():
@@ -150,7 +152,8 @@ class SaveState():
                 root[self.donestring()] = True
                 
                 # Prune the children when we mark a branch as done
-                root[self.childstring()] = {}
+                if self.prune_done:
+                    root[self.childstring()] = {}
                 
         self.save_state()
     
