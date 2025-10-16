@@ -735,6 +735,8 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     title = metadata._title
     year = metadata._year
     
+    print(artists, album, title, year)
+    
     unknown_artist = artists is None or 'unknown' in artists.lower()
     unknown_album = album is None or 'unknown' in album.lower()
     unknown_title = title is None or 'unknown' in title.lower()
@@ -781,13 +783,13 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
             
             # update only the unknown fields
             # Update metadata
-            if mb_metadata is not None:
+            
+            if doUpdate:
                 if update_artist:
                     
                     # Only update if artist is known
                     mb_artists = mb_metadata._artists
                     if mb_artists is not None:
-                        doUpdate = True
                         logger.info(f"Updating artist for \"{file}\" w/ \"{mb_artists}\"")
                         metadata.artists = mb_artists
                         unknown_artist = False
@@ -827,8 +829,6 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     # If not none, we had found an artist but it was ambiguous. But for purposes of metadata, keep
     # that old information. 
     
-    
-    
     if doUpdate and not unknown_artist: 
         artists = metadata._artists
     if doUpdate and not unknown_album:
@@ -837,6 +837,9 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
         title = metadata._title
     if doUpdate and not unknown_year:
         year = metadata._year
+        
+        
+    print(artists)
     
     if unknown_artist: 
         # If artist is still unknown, we don't want to make any changes to the metadata.
