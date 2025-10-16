@@ -53,6 +53,9 @@ tmpfile = os.path.join(os.path.dirname(__file__), 'tmp', 'tmpfile')
 os.makedirs(os.path.dirname(os.path.dirname(tmpfile)), exist_ok=True)
 shazam = None
 
+SHAZAM_RATE_LIMIT = 4 # second
+SHAZAM_MAX_RETRIES = 4
+
 # Python decorator to run a function in a thread and prevent keyboard interrupts
 def noInterrupt(func)->typing.Callable:
     def wrapper(*args, **kwargs)->None:
@@ -88,7 +91,7 @@ class SaveState():
         self.prune_done = prune_done 
         
         if save_data is None:
-            self.processed_data = self.init_child(self.rootstring())
+            self.processed_data = self.init_child_dir(self.rootstring())
         else:
             self.processed_data = save_data
             
@@ -130,29 +133,52 @@ class SaveState():
     def donestring():   
         return 'done'
     
+    @staticmethod 
+    def copypath():
+        return 'copy_path'
+    
     @noInterrupt
     def save_state(self):
         with open(self.outpath, 'w') as f:
             json.dump(self.processed_data, f, indent=4)
         
-    def init_child(self, name, mark_done=False):
+    def init_child_dir(self, name, mark_done=False):
         return {self.namestring(): name, self.childstring(): {}, self.donestring(): mark_done}
     
-    def update_path(self, path, mark_done=False)->None:
+    def init_child_file(self, name, markdone=False, copy_path=None):
+        return {self.namestring(): name, self.childstring(): {}, self.donestring(): markdone, self.copypath(): copy_path}
+    
+    def update_path(self, path, mark_done=False, copy_path=None, isdir=True)->None:
         split = path.split(os.sep)
         end = split[-1]
         root = self.processed_data
         
         for piece in split:
+            
             if piece not in root[self.childstring()]:
-                root[self.childstring()][piece] = self.init_child(piece)
+                if isdir:
+                    root[self.childstring()][piece] = self.init_child_dir(piece)
+                else:
+                    root[self.childstring()][piece] = self.init_child_file(piece)
                     
             root = root[self.childstring()][piece]
-            if root[self.namestring()] == end and mark_done:
-                root[self.donestring()] = True
+            
+            if root[self.namestring()] == end:
                 
-                # Prune the children when we mark a branch as done
-                if self.prune_done:
+                if not isdir and copy_path is not None:
+                    root[self.copypath()] = copy_path
+                
+                # Determine if this node is done 
+                children = root[self.childstring()]
+                is_done = root[self.donestring()] or mark_done 
+                for child in children:
+                    is_done = is_done and children[child][self.donestring()]
+                    if not is_done:
+                        break
+                root[self.donestring()] = is_done
+                
+                # If we prune the children when we mark a branch as done
+                if self.prune_done and is_done:
                     root[self.childstring()] = {}
                 
         self.save_state()
@@ -175,6 +201,7 @@ class SaveState():
  
 
 def clean_filename(name):
+    
     illegal_chars_replace_dict = {
         '/': ' - ',
         '\\': ' - ',
@@ -206,13 +233,12 @@ class MetaData():
     album:str
     title:str
     year:str
-    decade:str
     filetype:str 
     
     _artists:str
     _album:str 
     _title:str 
-    _date:datetime.date
+    _year:str
     _filetype:str 
     
     def __init__(self, year:str=None, artists:str=None, album:str=None, title:str=None, filetype:str=None):
@@ -224,45 +250,31 @@ class MetaData():
         
     @property 
     def year(self)->str:
-        if self._year is None:
-            return self.unknownYear
-        return self._year
+        return str(self._year) if self._year is not None else self.unknownYear
+    
     @year.setter
     def year(self, value):
-        if value is None:
-            value = self.unknownYear
-        self._year = str(value)
-    
-    @property
-    def decade(self)->str:
-        if self.year != self.unknownYear:
-            year_int = int(self.year)
-            decade_start = (year_int // 10) * 10
-            return f"{decade_start}s"
+        self._year = value
         
     @property 
     def artists(self)->str:
-        return self._artists
+        return self._artists if self._artists is not None else self.unknownArtist
     @artists.setter
     def artists(self, value):
-        if value is None:
-            value = self.unknownArtist
         self._artists = value
     
     @property
     def album(self)->str:
-        return self._album
+        return str(self._album) if self._album is not None else self.unknownAlbum
     @album.setter
     def album(self, value):
-        self._album = str(value) if value else self.unknownAlbum
+        self._album = value
     
     @property
     def title(self)->str:
         return self._title
     @title.setter
     def title(self, value):
-        if value is None:
-            raise ValueError("Title cannot be empty")
         self._title = value
         
     @property 
@@ -288,6 +300,9 @@ class MetaData():
     
     @property 
     def filename(self)->str:
+        if self.title is None:
+            raise ValueError("Title is not set -- cannot generate path!")
+        
         file = clean_filename(f'{self.title}')
         file = f'{file}.{self.filetype}'
         return file 
@@ -317,8 +332,10 @@ class MetaData():
         return os.path.join(self.relativeFileDir, self.filename)    
     
     def __str__(self):
-        return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: {self.relativeFilePath}'
-    
+        try:
+            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: {self.relativeFilePath}'
+        except Exception as e:    
+            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: Error generating path ({e})'
 class MatchError(Exception):
     pass
 
@@ -351,7 +368,7 @@ def score_string_match(candidate:str, target:str)->float:
 def start_service(app_name:str, app_version:str, contact:str):
     global shazam 
     start_musicbrainz(app_name, app_version, contact)
-    shazam = shazamio.Shazam(segment_duration_seconds=12, http_client=shazamio.HTTPClient(retry_options=ExponentialRetry(attempts=12,max_timeout=30,statuses=[500,502,503,504,429])))
+    shazam = shazamio.Shazam(segment_duration_seconds=12, http_client=shazamio.HTTPClient(retry_options=ExponentialRetry(attempts=SHAZAM_MAX_RETRIES,max_timeout=204.8,statuses=[500,502,503,504,429])))
 
 def start_musicbrainz(app_name, app_version, contact):
     musicbrainzngs.set_useragent(app_name, app_version, contact)
@@ -439,14 +456,16 @@ def process_aid_results(results, og_artist=None, og_title=None)->dict:
 
 def search_shazam_metadata(file)->dict:
     global shazam
-    time.sleep(1.0 / ACOUST_ID_RATE_LIMIT) # try not to exceed rate limit
+    # TODO: Turn back on.
+    # I think I got rate limited by Shazam.
+    time.sleep(SHAZAM_RATE_LIMIT) # try not to exceed rate limit
     out = asyncio.run(shazam.recognize(file))
+    out = {}
     if 'track' not in out:
         raise MatchError("No Shazam match found.") 
     return out
 
 def process_shazam_metadata(shazam_result, filetype)->MetaData:
-    
     track = shazam_result['track']
     title = track['title'].strip()
     artists = track['subtitle'].strip()
@@ -543,17 +562,9 @@ def mergeMetadata(m1:MetaData, m2:MetaData)->MetaData:
 
 def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.Tuple[MetaData, dict]:
     filetype = os.path.splitext(file)[1].lstrip('.')
+
+    new_metadata = MetaData(year=ogMetaData.year, artists=ogMetaData.artists, album=ogMetaData.album, title=ogMetaData.title, filetype=filetype)
     
-    # Find match with shazarm
-    shazam_metadata = None
-    logging.info(f"Fetching metadata for \"{file}\". Trying first with Shazam.")
-    try:
-        shazamresults = search_shazam_metadata(file) 
-        shazam_metadata = process_shazam_metadata(shazamresults, filetype)
-        logger.info(f"Shazam Metadata for \"{file}\":\n{shazam_metadata}")
-    except MatchError as e:
-        logger.warning(f"No Shazam match found for \"{file}\". Trying AcoustID.")
-   
     # Find match with AID
     aid_metadata = None
     try:
@@ -568,25 +579,12 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
         logger.warning(f"No AcoustID match found for \"{file}\".")
     except Exception as e: # TODO: Print stacktrace
         logger.error(f"Error processing MusicBrainz metadata: {traceback.format_exc()}")
-        
-        
-    new_metadata = MetaData(year=ogMetaData.year, artists=ogMetaData.artists, album=ogMetaData.album, title=ogMetaData.title, filetype=filetype)
     
-    if aid_metadata is not None and shazam_metadata is not None:
-        # Compare the two and return the one with more complete metadata
-        
-        if matchWithTargetMetadata(aid_metadata, shazam_metadata, threshold=0.7, message=' between AcoustID and Shazam'):
-            logger.info("AcoustID and Shazam results agree on artist and title. Using combined metadata, prefering AcoustID where available.")
-            new_metadata = mergeMetadata(aid_metadata, shazam_metadata)
-            return new_metadata, True
-           
-        else:
-            logger.warning(f"Could not reconcile AcoustID and Shazam results for \"{file}\".")
-            
+    # Compare AID results to provided metadata
     if aid_metadata is not None:
         logger.info("Comparing AcoustID results to provided artist and title.")
-        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.7, message=' for AcoustID')
-        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.7, message=' for AcoustID')
+        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.5, message=' for AcoustID')
+        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.5, message=' for AcoustID')
         if match_artist and match_title:
             logger.info("AcoustID results match provided artist and title. Using AcoustID metadata.")
             new_metadata = aid_metadata
@@ -604,10 +602,31 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
         else:
             logger.warning(f"AcoustID results do not match provided artist and title for \"{file}\".")
         
+    # Find match with shazam: we wait until after AID to avoid unnecessary Shazam queries
+    shazam_metadata = None
+    logging.info(f"Fetching metadata for \"{file}\". Trying with Shazam.")
+    try:
+        shazamresults = search_shazam_metadata(file) 
+        shazam_metadata = process_shazam_metadata(shazamresults, filetype)
+        logger.info(f"Shazam Metadata for \"{file}\":\n{shazam_metadata}")
+    except MatchError as e:
+        logger.warning(f"No Shazam match found for \"{file}\". Trying AcoustID.")
+    
+    if aid_metadata is not None and shazam_metadata is not None:
+        # Compare the two and return the one with more complete metadata
+        
+        if matchWithTargetMetadata(aid_metadata, shazam_metadata, threshold=0.7, message=' between AcoustID and Shazam'):
+            logger.info("AcoustID and Shazam results agree on artist and title. Using combined metadata, prefering AcoustID where available.")
+            new_metadata = mergeMetadata(aid_metadata, shazam_metadata)
+            return new_metadata, True
+           
+        else:
+            logger.warning(f"Could not reconcile AcoustID and Shazam results for \"{file}\".")
+
     if shazam_metadata is not None:
         logger.info("Comparing Shazam results to provided artist and title.")
-        match_title = matchWithTargetMetadataTitle(shazam_metadata.title, ogMetaData.title, threshold=0.7, message=' for Shazam')
-        match_artist = matchWithTargetMetadataArtist(shazam_metadata.artists, ogMetaData.artists, threshold=0.7, message=' for Shazam')       
+        match_title = matchWithTargetMetadataTitle(shazam_metadata.title, ogMetaData.title, threshold=0.5, message=' for Shazam')
+        match_artist = matchWithTargetMetadataArtist(shazam_metadata.artists, ogMetaData.artists, threshold=0.5, message=' for Shazam')       
         if match_artist and match_title:
             logger.info("Shazam results match provided artist and title. Using Shazam metadata.")
             new_metadata = shazam_metadata
@@ -628,58 +647,119 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
             
     return None, False # Not confident we have a match
 
-def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
-    song = mutagen.File(file, easy=True)
+def process_mutagen_key(song:mutagen.FileType, key:str)->str:
+    value = song[key][0]
+    value = str(value).strip()
+    return value
+
+def process_metadata_mutagen(song:mutagen.FileType, filetype)->mutagen.FileType:
+    unknown_title = True
+    unknown_album = True
+    unknown_artist = True 
+    unknown_year = True
+    
+    title = None 
+    album = None
+    artists = None
+    year = None
+    
+    if unknown_title:
+        for key in song:
+            if 'title' in key.lower():
+                title = process_mutagen_key(song, key)
+                unknown_title = False 
+                break
+            
+    # First try to see if there's an albumartist tag
+    if unknown_artist:
+        for key in song:
+            if 'albumartist' in key.lower():
+                artists = process_mutagen_key(song, key)
+                unknown_artist = False
+                break
+            
+    # Otherwise, try artist tag
+    if unknown_artist:
+        for key in song:
+            if 'artist' in key.lower():
+                artists = process_mutagen_key(song, key)
+                unknown_artist = False
+                break
+            
+    # Search for an album tag
+    if unknown_album:
+        for key in song:
+            if 'album' in key.lower() and not 'albumartist' in key.lower():
+                album = process_mutagen_key(song, key)
+                unknown_album = False
+                break
+            
+    if unknown_year:
+        for key in song:
+            if 'date' in key.lower() or 'year' in key.lower():
+                date = process_mutagen_key(song, key)
+                
+                # try processing as date
+                try:
+                    date = dateutil.parser.parse(date)
+                    year = date.year
+                    unknown_year = False 
+                    break
+                except dateutil.parser.ParserError:
+                    pass 
+                # try processing as int
+                
+                try:
+                    date = int(date)
+                    year = str(date)
+                    unknown_year = False
+                    break
+                except TypeError|ValueError:
+                    pass
+    
+    return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+
+def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
+    parent_dir = os.path.dirname(file)
+    parent_parent_dir = os.path.dirname(parent_dir)
     basename = os.path.basename(file)
     filename, filetype = os.path.splitext(basename)
     filetype = filetype.lstrip('.')
     if song is None: 
         raise ValueError(f"Cannot read metadata for {file}")
-       
-    unknown_title = False 
-    if 'title' in song:
-        title = ''.join(song['title'])
-    else:
-        unknown_title = True
-        title = filename # Use filename as title if title is missing
     
-    unknown_album = False
-    if 'album' in song:
-        album = ''.join(song['album'])
-    else:
-        # Use parent directory as album name
-        unknown_album = True
-        album = os.path.basename(os.path.dirname(file))
+    metadata = process_metadata_mutagen(song, filetype)
+    
+    artists = metadata._artists
+    album = metadata._album
+    title = metadata._title
+    year = metadata._year
+    
+    unknown_artist = artists is None or 'unknown' in artists.lower()
+    unknown_album = album is None or 'unknown' in album.lower()
+    unknown_title = title is None or 'unknown' in title.lower()
+    unknown_year = year is None or 'unknown' in str(year).lower()
+    
+    if unknown_album:
+        metadata.album = parent_dir
         
-    unknown_artist = False 
-    if 'artist' in song:    
-        artists = ''.join(song['artist'])
-    else:
-        unknown_artist = True
-        artists = album # Use album as artist if artist is missing
+    if unknown_title:
+        metadata.title = filename
     
-    unknown_year = False
-    if 'date' in song:
-        date = ''.join(song['date'])
-        date = dateutil.parser.parse(date)
-        year = date.year
-    
-    else:
-        year = None
-        unknown_year = True
-       
-    metadata = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+    if unknown_artist:
+        metadata.artists = metadata.album
+        
     logger.info('------')
     logger.info(f'Extracted Metadata for "{file}":\n{metadata}')
     logger.info('------')
     
-    unknown_artist = unknown_artist or artists is None or 'various' in artists.lower() or 'unknown' in artists.lower()
-    has_unknown = unknown_artist or unknown_album or unknown_title # Not too concerned about year being unknown
-    update_artist = unknown_artist or update_from_mb
+    update_artist = unknown_artist or update_from_mb or 'various' in artists.lower() or 'unknown' in artists.lower()
     update_album = unknown_album or update_from_mb
     update_title = unknown_title or update_from_mb
     update_year = update_from_mb or unknown_year
-    doUpdate = False
+    has_unknown = update_artist or update_album or update_title or update_year
+    doUpdate = False 
+    
     if update_from_mb and aid_api_key is None:
         logger.warning("AcoustID API key not provided. Cannot update metadata from MusicBrainz.")
     if has_unknown and aid_api_key is None:
@@ -704,32 +784,33 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
             if mb_metadata is not None:
                 if update_artist:
                     
-                    # Don't update if artist is unknown
-                    mb_artists = mb_metadata.artists_dir
-                    if mb_artists is not None and mb_artists != mb_metadata.unknownArtist:
+                    # Only update if artist is known
+                    mb_artists = mb_metadata._artists
+                    if mb_artists is not None:
+                        doUpdate = True
                         logger.info(f"Updating artist for \"{file}\" w/ \"{mb_artists}\"")
                         metadata.artists = mb_artists
                         unknown_artist = False
                         
                 if update_album:
-                    mb_album = mb_metadata.album
+                    mb_album = mb_metadata._album
                     # Don't update if album is unknown
-                    if mb_album is not None and mb_album != mb_metadata.unknownAlbum:
+                    if mb_album is not None:
                         logger.info(f"Updating album for \"{file}\" w/ \"{mb_album}\"")
                         metadata.album = mb_album
                         unknown_album = False
                 
                 if update_title:
-                    mb_title = mb_metadata.title
+                    mb_title = mb_metadata._title
                     if mb_title is not None:
                         logger.info(f"Updating title for \"{file}\" w/ \"{mb_title}\"")
                         metadata.title = mb_title
                         unknown_title = False
                     
                 if update_year:
-                    mb_year = mb_metadata.year
+                    mb_year = mb_metadata._year
                     # Don't update if year is unknown
-                    if mb_year is not None and mb_year != mb_metadata.unknownYear:
+                    if mb_year is not None:
                         logger.info(f"Updating year for \"{file}\" w/ \"{mb_year}\"")
                         metadata.year = mb_year
                         unknown_year = False
@@ -743,20 +824,47 @@ def extract_and_update_metadata(file, aid_api_key=None, update_from_mb=False)->t
         except Exception as e:
             logger.error(f"Could not update metadata for \"{file}\": {traceback.format_exc()}")
             
-    if unknown_artist and not doUpdate: 
+    # If not none, we had found an artist but it was ambiguous. But for purposes of metadata, keep
+    # that old information. 
+    
+    
+    
+    if doUpdate and not unknown_artist: 
+        artists = metadata._artists
+    if doUpdate and not unknown_album:
+        album = metadata._album
+    if doUpdate and not unknown_title:
+        title = metadata._title
+    if doUpdate and not unknown_year:
+        year = metadata._year
+    
+    if unknown_artist: 
         # If artist is still unknown, we don't want to make any changes to the metadata.
         # Will require a manual sorting.
         metadata.artists = '! Sort'
-        return metadata, song
     
-    if unknown_album:
+        # Preserve some of the original filestructure when artist is missing
+        if unknown_album:
+            metadata.album = parent_dir
+        if unknown_year:
+            metadata.year = parent_parent_dir
+        
+        return metadata, song
+
+    
+    # Only change the metadata fields that we consider known
+    if update_album and not unknown_album:
         song['album'] = metadata.album
-    if unknown_artist:
+    if update_artist and not unknown_artist:
         song['artist'] = metadata.artists
-    if unknown_title:
+    if update_title and not unknown_title:
         song['title'] = metadata.title
-    if unknown_year:
+    if update_year and not unknown_year:
         song['date'] = metadata.year
+        try:
+            song['year'] = metadata.year
+        except:
+            pass
     
     return metadata, song
 
@@ -766,7 +874,7 @@ def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pb
     if not overwrite and os.path.exists(dest):
         basename = os.path.basename(dest)
         logger.warning(f'File "{basename}" already exists. Skipping copy of "{src}".')
-        save_mark_done(src, save=save)
+        save_mark_done(src, save=save, isdir=False, copy_path=dest)
         return
     
      # Ensure the destination directory exists
@@ -779,7 +887,7 @@ def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pb
         pbar.set_description(f'\nCopied "{src}" to "{dest}".')
         print(end='') # Prevent tqdm from adding a new line
     
-    save_mark_done(src, save=save)
+    save_mark_done(src, save=save, isdir=False, copy_path=dest)
     
 def count_total_files(src):
     total_files = 0
@@ -799,9 +907,13 @@ def check_is_music_file(file):
     except Exception as e:
         return False
 
-def save_mark_done(src, save:SaveState=None):
+def save_mark_done(src, save:SaveState=None, isdir=True, copy_path=None):
     if save is not None:
-        save.update_path(src, mark_done=True)
+        save.update_path(src, mark_done=True, isdir=isdir, copy_path=copy_path)
+        
+def save_mark_undone(src, save:SaveState=None, isdir=True, copy_path=None):
+    if save is not None:
+        save.update_path(src, mark_done=False, isdir=isdir, copy_path=copy_path)
         
 def message_skip_procesed(src):
     logger.info(f'Skipping already processed source path: {src}')
@@ -816,13 +928,18 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
         for root, dirs, files in os.walk(src, topdown=False): # Walk tree from bottom up to ensure we process files in subdirectories first
             
             if save_check_done(root, save=save):
+                save_mark_done(root, save=save, isdir=True)
                 message_skip_procesed(root)
                 count_total_files(root)
                 pbar.update(len(files))
                 print(end='') # Prevent tqdm from adding a new line
                 continue
             
+            else:
+                save_mark_undone(root, save=save, isdir=True)
+            
             for file in files:
+                
                 
                 src_filepath = os.path.join(root, file)
                 
@@ -830,17 +947,28 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                 print(end='') # Prevent tqdm from adding a new line
                 
                 if save_check_done(src_filepath, save=save):
+                    save_mark_done(src_filepath, save=save, isdir=False)
                     message_skip_procesed(src_filepath)
                     continue
+                
+                else:
+                    save_mark_undone(src_filepath, save=save, isdir=False)
                 
                 pbar.set_description(f'\nProcessing \"{src_filepath}\".')
                 
                 if not check_is_music_file(src_filepath):
                     logger.info(f'Skipping non-music file: \"{src_filepath}\"')
+                    save_mark_done(src_filepath, save=save, isdir=False)
                     continue
                 
+                try: 
+                    song = mutagen.File(src_filepath, easy=True)
+                except mutagen.MutagenError as e:
+                    logging.error(f"Could not read metadata for \"{src_filepath}\": {traceback.format_exc()}")
+                    continue 
+                
                 try:
-                    metadata, song = extract_and_update_metadata(src_filepath, aid_api_key=acoustid_api_key, update_from_mb=update_from_mb)
+                    metadata, song = extract_and_update_metadata(src_filepath, song, aid_api_key=acoustid_api_key, update_from_mb=update_from_mb)
                     dest_path = os.path.join(dst, metadata.relativeFilePath)
                     
                 except Exception as e:
