@@ -806,10 +806,10 @@ def extract_and_update_metadata(file, song:MediaFile, aid_api_key=None, update_f
     if title is not None and len(title) == 0:
         title = None
         metadata.title = None
-    year = metadata._year
-    if year is not None and len(str(year)) == 0:
-        year = None
-        metadata.year = None
+    # year = metadata._year
+    # if year is not None and len(str(year)) == 0:
+    #     year = None
+    #     metadata.year = None
     
     unknown_artist = artists is None or 'unknown' in artists.lower()
     unknown_album = album is None or 'unknown' in album.lower()
@@ -1064,7 +1064,7 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                     continue
                 
                 try:
-                    copy_song(src_filepath, dest_path, overwrite=overwrite, mutagen_file=song, save=save, pbar=pbar)
+                    copy_song(src_filepath, dest_path, overwrite=overwrite, mediafile=song, save=save, pbar=pbar)
                 except Exception as e:
                     logger.error(f"Error copying \"{src_filepath}\" to \"{dest_path}\": {traceback.format_exc()}")
                     continue
