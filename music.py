@@ -47,14 +47,15 @@ import shazamio
 import nest_asyncio
 nest_asyncio.apply()
 import asyncio
+from mediafile import MediaFile, FileTypeError, MutagenError, UnreadableFileError
 from aiohttp_retry import ExponentialRetry
 
 tmpfile = os.path.join(os.path.dirname(__file__), 'tmp', 'tmpfile')
 os.makedirs(os.path.dirname(os.path.dirname(tmpfile)), exist_ok=True)
 shazam = None
 
-SHAZAM_RATE_LIMIT = 4 # second
-SHAZAM_MAX_RETRIES = 4
+SHAZAM_RATE_LIMIT = 3.1 # second
+SHAZAM_MAX_RETRIES = 3
 
 # Python decorator to run a function in a thread and prevent keyboard interrupts
 def noInterrupt(func)->typing.Callable:
@@ -333,9 +334,12 @@ class MetaData():
     
     def __str__(self):
         try:
-            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: {self.relativeFilePath}'
+            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\n Filetype: {self.filetype}\nPath: {self.relativeFilePath}'
         except Exception as e:    
-            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\nYear: {self.year}\nFiletype: {self.filetype}\nPath: Error generating path ({e})'
+            return f'Title: {self.title}\nArtists: {self.artists}\nAlbum: {self.album}\n Filetype: {self.filetype}\nPath: Error generating path ({e})'
+        
+        
+        
 class MatchError(Exception):
     pass
 
@@ -368,7 +372,6 @@ def score_string_match(candidate:str, target:str)->float:
 def start_service(app_name:str, app_version:str, contact:str):
     global shazam 
     start_musicbrainz(app_name, app_version, contact)
-    shazam = shazamio.Shazam(segment_duration_seconds=12, http_client=shazamio.HTTPClient(retry_options=ExponentialRetry(attempts=SHAZAM_MAX_RETRIES,max_timeout=204.8,statuses=[500,502,503,504,429])))
 
 def start_musicbrainz(app_name, app_version, contact):
     musicbrainzngs.set_useragent(app_name, app_version, contact)
@@ -455,12 +458,11 @@ def process_aid_results(results, og_artist=None, og_title=None)->dict:
     return rid, title, artist
 
 def search_shazam_metadata(file)->dict:
-    global shazam
     # TODO: Turn back on.
     # I think I got rate limited by Shazam.
     time.sleep(SHAZAM_RATE_LIMIT) # try not to exceed rate limit
+    shazam = shazamio.Shazam()
     out = asyncio.run(shazam.recognize(file))
-    out = {}
     if 'track' not in out:
         raise MatchError("No Shazam match found.") 
     return out
@@ -473,48 +475,36 @@ def process_shazam_metadata(shazam_result, filetype)->MetaData:
     sections = track['sections'][0]
     section_metadata = sections['metadata']
     album = None
-    year = None
+    # year = None
     for smd in section_metadata:
         if smd['title'] == 'Album':
             album = smd['text'].strip()
             break
-        if smd['title'].lower() == 'Released'.lower():
-            date = dateutil.parser.parse(smd['text'])
-            year = date.year
-            break
+        # if smd['title'].lower() == 'Released'.lower():
+        #     date = dateutil.parser.parse(smd['text'])
+        #     # year = date.year
+        #     break
             
-    return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
-
-def search_musicbrainz_metadata(acoustid_id)->typing.Tuple[MetaData, dict]:
-    try:
-        result = musicbrainzngs.get_recording_by_id(acoustid_id, includes=["artists", "releases"])
-        metadata = process_musicbrainz_metadata(result, filetype='mp3')
-        return metadata
-    except musicbrainzngs.WebServiceError as e:
-        logger.error("Something went wrong with the request: %s", traceback.format_exc())
-        raise e
-    except Exception as e: # TODO: Print stacktrace
-        logger.error(f"Error processing MusicBrainz metadata: {traceback.format_exc()}")
-        raise e
+    return MetaData(artists=artists, album=album, title=title, filetype=filetype)
 
 def process_musicbrainz_metadata(mb_result, artists, title, filetype) -> MetaData:
     recording = mb_result['recording']
     
     if len(recording['release-list']) == 0:
         album = None
-        year = None
+        # year = None
     
     else:
         first_release = recording['release-list'][0]
         album = first_release['title'].strip()
         
-        # Get year from first release date
-        year = None
-        if 'date' in first_release:
-            date = dateutil.parser.parse(first_release['date'].strip())
-            year = date.year 
+        # # Get year from first release date
+        # year = None
+        # if 'date' in first_release:
+        #     date = dateutil.parser.parse(first_release['date'].strip())
+        #     year = date.year 
     
-    processed = MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+    processed = MetaData(artists=artists, album=album, title=title, filetype=filetype)
     return processed
 
 
@@ -552,18 +542,18 @@ def mergeMetadata(m1:MetaData, m2:MetaData)->MetaData:
     if m2 is None:
         return m1
     
-    year = getValueIfNotNone(m1.year, m2.year)
+    # year = getValueIfNotNone(m1.year, m2.year)
     artists = getValueIfNotNone(m1.artists, m2.artists)
     album = getValueIfNotNone(m1.album, m2.album)
     title = getValueIfNotNone(m1.title, m2.title)
     filetype = getValueIfNotNone(m1.filetype, m2.filetype)
     
-    return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+    return MetaData(artists=artists, album=album, title=title, filetype=filetype)
 
 def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.Tuple[MetaData, dict]:
     filetype = os.path.splitext(file)[1].lstrip('.')
 
-    new_metadata = MetaData(year=ogMetaData.year, artists=ogMetaData.artists, album=ogMetaData.album, title=ogMetaData.title, filetype=filetype)
+    new_metadata = MetaData(artists=ogMetaData.artists, album=ogMetaData.album, title=ogMetaData.title, filetype=filetype)
     
     # Find match with AID
     aid_metadata = None
@@ -590,17 +580,9 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
             new_metadata = aid_metadata
             if new_metadata.album == new_metadata.unknownAlbum:
                 new_metadata.album = ogMetaData.album
-            if new_metadata.year == new_metadata.unknownYear:
-                new_metadata.year = ogMetaData.year
+            # if new_metadata.year == new_metadata.unknownYear:
+            #     new_metadata.year = ogMetaData.year
             return new_metadata, True
-        elif match_artist:
-            new_metadata.artists = aid_metadata.artists
-            return new_metadata, False
-        elif match_title:
-            new_metadata.title = aid_metadata.title
-            return new_metadata, False
-        else:
-            logger.warning(f"AcoustID results do not match provided artist and title for \"{file}\".")
         
     # Find match with shazam: we wait until after AID to avoid unnecessary Shazam queries
     shazam_metadata = None
@@ -622,6 +604,18 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
            
         else:
             logger.warning(f"Could not reconcile AcoustID and Shazam results for \"{file}\".")
+            
+    if aid_metadata is not None:
+        match_title = matchWithTargetMetadataTitle(aid_metadata.title, ogMetaData.title, threshold=0.5, message=' for AcoustID')
+        match_artist = matchWithTargetMetadataArtist(aid_metadata.artists, ogMetaData.artists, threshold=0.5, message=' for AcoustID')
+        if match_artist:
+            new_metadata.artists = aid_metadata.artists
+            return new_metadata, False
+        elif match_title:
+            new_metadata.title = aid_metadata.title
+            return new_metadata, False
+        else:
+            logger.warning(f"AcoustID results do not match provided artist and title for \"{file}\".")
 
     if shazam_metadata is not None:
         logger.info("Comparing Shazam results to provided artist and title.")
@@ -632,8 +626,8 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
             new_metadata = shazam_metadata
             if new_metadata.album == new_metadata.unknownAlbum:
                 new_metadata.album = ogMetaData.album
-            if new_metadata.year == new_metadata.unknownYear:
-                new_metadata.year = ogMetaData.year
+            # if new_metadata.year == new_metadata.unknownYear:
+            #     new_metadata.year = ogMetaData.year
             return new_metadata, True
         elif match_artist:
             new_metadata.artists = aid_metadata.artists
@@ -647,87 +641,150 @@ def search_online_metadata(file, aid_api_key, ogMetaData:MetaData=None)->typing.
             
     return None, False # Not confident we have a match
 
-def process_mutagen_key(song:mutagen.FileType, key:str)->str:
-    value = song[key][0]
-    value = str(value).strip()
-    return value
+# def process_mutagen_key(song:MediaFile, key:str)->str:
+#     value = song[key][0]
+#     value = str(value).strip()
+#     return value
 
-def process_metadata_mutagen(song:mutagen.FileType, filetype)->mutagen.FileType:
-    unknown_title = True
-    unknown_album = True
-    unknown_artist = True 
-    unknown_year = True
+# def process_metadata_mutagen(song:MediaFil, filetype)->mutagen.FileType:
+#     unknown_title = True
+#     unknown_album = True
+#     unknown_artist = True 
+#     # unknown_year = True
     
-    title = None 
-    album = None
-    artists = None
-    year = None
+#     title = None 
+#     album = None
+#     artists = None
+#     # year = None
     
-    if unknown_title:
-        for key in song:
-            if 'title' in key.lower():
-                title = process_mutagen_key(song, key)
-                unknown_title = False 
-                break
+#     song_keys_lower = {key.lower(): key for key in song}
+    
+#     # Try direct access to keys first
+#     if unknown_title:
+#         if 'title' in song_keys_lower:
+#             title_key = song_keys_lower['title']
+#             title = process_mutagen_key(song, title_key)
+#             unknown_title = False
+        
+#     if unknown_artist:    
+#         if 'albumartist' in song_keys_lower:
+#             albumartist_key = song_keys_lower['albumartist']
+#             artists = process_mutagen_key(song, albumartist_key)
+#             unknown_artist = False
             
-    # First try to see if there's an albumartist tag
-    if unknown_artist:
-        for key in song:
-            if 'albumartist' in key.lower():
-                artists = process_mutagen_key(song, key)
-                unknown_artist = False
-                break
+#     if unknown_artist:
+#         if 'artist' in song_keys_lower:
+#             artist_key = song_keys_lower['artist']
+#             artists = process_mutagen_key(song, artist_key)
+#             unknown_artist = False
+    
+#     if unknown_artist:
+#         if 'author' in song_keys_lower:
+#             author_key = song_keys_lower['author']
+#             artists = process_mutagen_key(song, author_key)
+#             unknown_artist = False
             
-    # Otherwise, try artist tag
-    if unknown_artist:
-        for key in song:
-            if 'artist' in key.lower():
-                artists = process_mutagen_key(song, key)
-                unknown_artist = False
-                break
+#     if unknown_album:
+#         if 'album' in song_keys_lower:
+#             album_key = song_keys_lower['album']
+#             album = process_mutagen_key(song, album_key)
+#             unknown_album = False
+    
+#     if unknown_title:
+#         for key in song:    
+#             if 'title' in key.lower() and 'album' not in key.lower():
+#                 title = process_mutagen_key(song, key)
+#                 unknown_title = False 
+#                 break
             
-    # Try author 
-    if unknown_artist:
-        for key in song:
-            if 'author' in key.lower():
-                artists = process_mutagen_key(song, key)
-                unknown_artist = False
-                break
+#     # if unknown_year:
+#     #     if 'date' in song_keys_lower or 'year' in song_keys_lower:
+#     #         date_key = song_keys_lower['date']
+#     #         date = process_mutagen_key(song, date_key)
             
-    # Search for an album tag
-    if unknown_album:
-        for key in song:
-            if 'album' in key.lower() and not 'albumartist' in key.lower():
-                album = process_mutagen_key(song, key)
-                unknown_album = False
-                break
+#     #         # try processing as date
+#     #         try:
+#     #             date = dateutil.parser.parse(date)
+#     #             year = date.year
+#     #             unknown_year = False 
+#     #         except dateutil.parser.ParserError:
+#     #             pass 
+#     #         # try processing as int
             
-    if unknown_year:
-        for key in song:
-            if 'date' in key.lower() or 'year' in key.lower():
-                date = process_mutagen_key(song, key)
+#     #         try:
+#     #             date = int(date)
+#     #             year = str(date)
+#     #             unknown_year = False
+#     #         except Exception:
+#     #             pass
+    
+#     # Try author 
+#     if unknown_artist:
+#         for key in song:
+#             if 'author' in key.lower():
+#                 artists = process_mutagen_key(song, key)
+#                 unknown_artist = False
+#                 break
+            
+#     # Otherwise, try artist tag
+#     if unknown_artist:
+#         for key in song:
+#             if 'artist' in key.lower():
+#                 artists = process_mutagen_key(song, key)
+#                 unknown_artist = False
+#                 break
+            
+#     # Last, try composer tag
+#     if unknown_artist:
+#         for key in song:
+#             if 'composer' in key.lower():
+#                 artists = process_mutagen_key(song, key)
+#                 unknown_artist = False
+#                 break
+           
+#     # Search for an album tag
+#     if unknown_album:
+#         for key in song:
+#             if 'album' in key.lower() and not 'albumartist' in key.lower():
+#                 album = process_mutagen_key(song, key)
+#                 unknown_album = False
+#                 break
+            
+#     # if unknown_year:
+#     #     for key in song:
+#     #         if 'date' in key.lower() or 'year' in key.lower():
+#     #             date = process_mutagen_key(song, key)
                 
-                # try processing as date
-                try:
-                    date = dateutil.parser.parse(date)
-                    year = date.year
-                    unknown_year = False 
-                    break
-                except dateutil.parser.ParserError:
-                    pass 
-                # try processing as int
+#     #             # try processing as date
+#     #             try:
+#     #                 date = dateutil.parser.parse(date)
+#     #                 year = date.year
+#     #                 unknown_year = False 
+#     #                 break
+#     #             except dateutil.parser.ParserError:
+#     #                 pass 
+#     #             # try processing as int
                 
-                try:
-                    date = int(date)
-                    year = str(date)
-                    unknown_year = False
-                    break
-                except TypeError|ValueError:
-                    pass
+#     #             try:
+#     #                 date = int(date)
+#     #                 year = str(date)
+#     #                 unknown_year = False
+#     #                 break
+#     #             except Exception:
+#     #                 pass
     
-    return MetaData(year=year, artists=artists, album=album, title=title, filetype=filetype)
+#     return MetaData(artists=artists, album=album, title=title, filetype=filetype)
 
-def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
+def process_song_mediafile(song:MediaFile, filetype)->MetaData:
+    title = song.title
+    album = song.album
+    artists = song.artist
+    # year = song.year
+    
+    return MetaData(artists=artists, album=album, title=title, filetype=filetype)
+    
+
+def extract_and_update_metadata(file, song:MediaFile, aid_api_key=None, update_from_mb=False)->typing.Union[MetaData, mutagen.FileType]:
     parent_dir = os.path.basename(os.path.dirname(file))
     basename = os.path.basename(file)
     filename, filetype = os.path.splitext(basename)
@@ -735,17 +792,29 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     if song is None: 
         raise ValueError(f"Cannot read metadata for {file}")
     
-    metadata = process_metadata_mutagen(song, filetype)
+    metadata = process_song_mediafile(song, filetype)
     
     artists = metadata._artists
+    if artists is not None and len(artists) == 0:
+        artists = None
+        metadata.artists = None
     album = metadata._album
+    if album is not None and len(album) == 0:
+        album = None
+        metadata.album = None
     title = metadata._title
+    if title is not None and len(title) == 0:
+        title = None
+        metadata.title = None
     year = metadata._year
+    if year is not None and len(str(year)) == 0:
+        year = None
+        metadata.year = None
     
     unknown_artist = artists is None or 'unknown' in artists.lower()
     unknown_album = album is None or 'unknown' in album.lower()
     unknown_title = title is None or 'unknown' in title.lower()
-    unknown_year = year is None or 'unknown' in str(year).lower()
+    # unknown_year = year is None or 'unknown' in str(year).lower()
     
     if unknown_album:
         metadata.album = parent_dir
@@ -761,10 +830,10 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
     logger.info('------')
     
     update_artist = unknown_artist or update_from_mb or 'various' in artists.lower() or 'unknown' in artists.lower()
-    update_album = unknown_album or update_from_mb
-    update_title = unknown_title or update_from_mb
-    update_year = update_from_mb or unknown_year
-    has_unknown = update_artist or update_album or update_title or update_year
+    update_album = unknown_album or update_from_mb or 'unknown' in album.lower()
+    update_title = unknown_title or update_from_mb 
+    # update_year = update_from_mb or unknown_year
+    has_unknown = update_artist or update_album # or update_title or update_year; don't worry about title or year being unknown.
     doUpdate = False 
     
     if update_from_mb and aid_api_key is None:
@@ -783,13 +852,12 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
             logger.info(f"Fetching metadata for \"{file}\" from MusicBrainz")
             mb_metadata, doUpdate = search_online_metadata(file, aid_api_key, ogMetaData=metadata)
             
-            logger.info(f"Successfully fetched metadata for \"{file}\" from MusicBrainz.")
-            logger.info(f"MusicBrainz Metadata for \"{file}\":\n{mb_metadata}")
-            
             # update only the unknown fields
             # Update metadata
-            
             if doUpdate:
+                logger.info(f"Successfully fetched metadata for \"{file}\" from online.")
+                logger.info(f"Updated metadata for \"{file}\":\n{mb_metadata}")
+                
                 if update_artist:
                     
                     # Only update if artist is known
@@ -814,13 +882,13 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
                         metadata.title = mb_title
                         unknown_title = False
                     
-                if update_year:
-                    mb_year = mb_metadata._year
-                    # Don't update if year is unknown
-                    if mb_year is not None:
-                        logger.info(f"Updating year for \"{file}\" w/ \"{mb_year}\"")
-                        metadata.year = mb_year
-                        unknown_year = False
+                # if update_year:
+                #     mb_year = mb_metadata._year
+                #     # Don't update if year is unknown
+                #     if mb_year is not None:
+                #         logger.info(f"Updating year for \"{file}\" w/ \"{mb_year}\"")
+                #         metadata.year = mb_year
+                #         unknown_year = False
                         
             logger.info('------')
             logger.info(f'Updated Metadata for "{file}":\n{metadata}')
@@ -833,39 +901,29 @@ def extract_and_update_metadata(file, song, aid_api_key=None, update_from_mb=Fal
             
     # If not none, we had found an artist but it was ambiguous. But for purposes of metadata, keep
     # that old information. 
-    
-    if doUpdate and not unknown_artist: 
-        artists = metadata._artists
-    if doUpdate and not unknown_album:
-        album = metadata._album
-    if doUpdate and not unknown_title:
-        title = metadata._title
-    if doUpdate and not unknown_year:
-        year = metadata._year
-    
+     
     if unknown_artist: 
         # If artist is still unknown, we don't want to make any changes to the metadata.
         # Will require a manual sorting.
         return None
     
-    # Only change the metadata fields that we consider known
-    if update_album and not unknown_album:
-        song['album'] = metadata.album
-    if update_artist and not unknown_artist:
-        song['artist'] = metadata.artists
-    if update_title and not unknown_title:
-        song['title'] = metadata.title
-    if update_year and not unknown_year:
-        song['date'] = metadata.year
-        try:
-            song['year'] = metadata.year
-        except:
-            pass
-    
+    print(doUpdate, update_artist, update_album, update_title)
+    if doUpdate and update_artist: 
+        song.artist = metadata.artists
+    if doUpdate and update_album:
+        song.album = metadata.album
+    if doUpdate and update_title:
+        song.title = metadata.title
+    # if doUpdate and update_year:
+    #     if 'wma' in filetype.lower():
+    #         song['Year'] = [str(metadata.year)]
+    #     else:
+    #         song['Date'] = [str(metadata.year)]
+   
     return metadata
 
 @noInterrupt
-def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pbar=None, save=None):
+def copy_song(src, dest, overwrite=False, mediafile:MediaFile=None, pbar=None, save=None):
    
     if not overwrite and os.path.exists(dest):
         basename = os.path.basename(dest)
@@ -876,8 +934,14 @@ def copy_song(src, dest, overwrite=False, mutagen_file:mutagen.FileType=None, pb
      # Ensure the destination directory exists
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)
-    if mutagen_file is not None:
-        mutagen_file.save(dest)
+    
+    if mediafile is not None:
+        mediafile2 = MediaFile(dest)
+        mediafile2.artist = mediafile.artist
+        mediafile2.album = mediafile.album
+        mediafile2.title = mediafile.title
+        mediafile2.save()
+        
     logger.info(f"Copied \"{src}\" to \"{dest}\"")
     if pbar is not None:
         pbar.set_description(f'\nCopied "{src}" to "{dest}".')
@@ -890,7 +954,6 @@ def count_total_files(src):
     for root, dirs, files in os.walk(src):
         total_files += len(files)
     return total_files
-
 
 def check_is_music_file(file):
     # use mutagen 
@@ -936,6 +999,8 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
             
             for file in files:
                 
+                metadata = None
+                
                 src_filepath = os.path.join(root, file)
                 
                 pbar.update()
@@ -957,7 +1022,9 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                     continue
                 
                 try: 
-                    song = mutagen.File(src_filepath, easy=True)
+                    # song = mutagen.File(src_filepath, easy=True
+                    song = MediaFile(src_filepath)
+                    
                 except mutagen.MutagenError as e:
                     logging.error(f"Could not read metadata for \"{src_filepath}\": {traceback.format_exc()}")
                     continue 
@@ -971,13 +1038,26 @@ def process_song_directory(src, dst, overwrite=False, acoustid_api_key=None, tot
                         
                     else:
                         logging.warning(f"Could not confidently identify metadata for \"{src_filepath}\". Placing in \"{unknown_folder}\" folder for later sorting.")
-                        filetype = os.path.splitext(file)[1].lstrip('.')
+                        _, filetype = os.path.splitext(file)
+                        filetype = filetype.lstrip('.')
                         dest_path = os.path.join(dst, unknown_folder, filetype)
                         parent_dir = os.path.dirname(src_filepath)
                         parent_parent_dir = os.path.dirname(parent_dir)
                         parent_dirname = os.path.basename(parent_dir)
                         parent_parent_dirname = os.path.basename(parent_parent_dir)
                         dest_path = os.path.join(dest_path, parent_parent_dirname, parent_dirname, file)
+                    
+                except UnreadableFileError as e:
+                    logger.error(f"Could not read metadata for \"{src_filepath}\": {traceback.format_exc()}")
+                    continue
+                
+                except FileTypeError as e:
+                    logger.error(f"Unsupported file type for \"{src_filepath}\": {traceback.format_exc()}")
+                    continue
+                
+                except MutagenError as e:
+                    logger.error(f"Mutagen error for \"{src_filepath}\": {traceback.format_exc()}")
+                    continue
                     
                 except Exception as e:
                     logger.error(f"Error processing \"{src_filepath}\": {traceback.format_exc()}")
